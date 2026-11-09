@@ -21,14 +21,14 @@ def _to_builtin_scalar(arg: Any) -> Any:
     Reduce an int/float/str subclass (e.g. ``signal.SIGTERM``) to its exact builtin type.
 
     The archiver only recognises the exact builtin scalar types. ``bool`` has its own encoding and is
-    kept, and the base's own conversion is used because subclasses (e.g. ``Enum``) override ``__str__``.
+    kept. ``str.__str__`` is used because ``Enum`` overrides ``__str__`` (``str(S.X)`` is ``"S.X"``).
     """
     if type(arg) in (bool, int, float, str):
         return arg
     if isinstance(arg, int):
-        return int.__int__(arg)
+        return int(arg)
     if isinstance(arg, float):
-        return float.__float__(arg)
+        return float(arg)
     if isinstance(arg, str):
         return str.__str__(arg)
     return arg
