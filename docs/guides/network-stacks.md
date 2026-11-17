@@ -44,6 +44,10 @@ flowchart LR
 - **Root:** not required.
 - **Disconnect:** a Wi-Fi link can die silently, so these connections run TCP keep-alive
   (idle 3 s / interval 3 s) — a vanished device errors out within seconds.
+- **Heartbeat:** a device drops the services of a network host that is not answering
+  `com.apple.mobile.heartbeat` (iOS and tvOS 27.2 do so within seconds, for most services). The network
+  lockdown client answers it in the background from the moment it is created until it is closed,
+  so keep it open for as long as its services are in use.
 
 ## Kernel tunnel (`start-tunnel` / `tunneld`)
 

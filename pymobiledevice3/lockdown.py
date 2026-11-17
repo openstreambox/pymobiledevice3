@@ -230,6 +230,7 @@ class LockdownClient(ABC, LockdownServiceProvider):
         )
         await lockdown_client._initialize()
         await lockdown_client._handle_autopair(autopair, pair_timeout, private_key=private_key)
+        await lockdown_client._created()
         return lockdown_client
 
     async def _initialize(self) -> None:
@@ -251,6 +252,9 @@ class LockdownClient(ABC, LockdownServiceProvider):
         self.unique_chip_id = self.all_values.get("UniqueChipID")
         self.device_public_key = self.all_values.get("DevicePublicKey")
         self.product_type = self.all_values.get("ProductType")
+
+    async def _created(self) -> None:
+        """Called by `create` once the client is initialized, for what a transport needs beyond that."""
 
     def __repr__(self) -> str:
         """
@@ -1347,7 +1351,19 @@ class TcpLockdownClient(LockdownClient):
 
     Obtain an instance from `create_using_tcp`. The device is addressed by hostname; service
     connections are opened with `create_using_tcp`.
+
+    A device drops the services of a network host that is not answering its heartbeat, so the client
+    answers it in the background from the moment it is created until it is closed (once paired, for a
+    client that was created unpaired). Keep the client open for as long as its services are in use:
+
+    .. code-block:: python
+
+        async with await create_using_tcp("192.168.0.2") as lockdown:
+            async with AfcService(lockdown) as afc:
+                ...
     """
+
+    HEARTBEAT_SERVICE_NAME = "com.apple.mobile.heartbeat"
 
     def __init__(
         self,
@@ -1385,6 +1401,87 @@ class TcpLockdownClient(LockdownClient):
         self._keep_alive = keep_alive
         self.hostname = hostname
         self.identifier = hostname
+        self._heartbeat: Optional[asyncio.Task[None]] = None
+        self._heartbeat_service: Optional[ServiceConnection] = None
+        self._heartbeat_lock: Optional[asyncio.Lock] = None
+
+    async def _created(self) -> None:
+        """Start answering the device's heartbeat as soon as `create` has the client ready."""
+        await self._ensure_heartbeat()
+
+    async def get_service_connection_attributes(self, name: str, include_escrow_bag: bool = False) -> dict[str, Any]:
+        """Ask lockdownd to start a named service and return its connection attributes.
+
+        A heartbeat that was lost, or could not be started yet, is opened first. See
+        `LockdownClient.get_service_connection_attributes`.
+
+        :param name: The lockdownd service name to start (e.g. ``"com.apple.afc"``).
+        :param include_escrow_bag: When True, include the pair record's escrow bag in the request (required by
+            some services to operate while the device is locked).
+        :returns: The service connection attributes (including ``Port`` and possibly ``EnableServiceSSL``).
+        :raises NotPairedError: The client is not paired with the device.
+        :raises PasswordRequiredError: The device is passcode-protected and must be unlocked first.
+        :raises StartServiceError: lockdownd refused to start the service.
+        """
+        if name != self.HEARTBEAT_SERVICE_NAME:
+            await self._ensure_heartbeat()
+        return await super().get_service_connection_attributes(name, include_escrow_bag=include_escrow_bag)
+
+    async def close(self) -> None:
+        """Stop answering the heartbeat and close the underlying lockdownd connection.
+
+        The device drops the services started through this client within seconds of this.
+        Called automatically when the client is used as an async context manager.
+        """
+        try:
+            await self._close_heartbeat()
+        finally:
+            await super().close()
+
+    async def _ensure_heartbeat(self) -> None:
+        """Open the heartbeat connection unless one is being answered; a lost one is reopened.
+
+        A heartbeat that cannot be started is not an error here: whatever prevents it is left for the
+        service the caller starts next to report.
+        """
+        if not self.paired:
+            return
+        if self._heartbeat_lock is None:
+            self._heartbeat_lock = asyncio.Lock()
+        async with self._heartbeat_lock:
+            if self._heartbeat is not None and not self._heartbeat.done():
+                return
+            await self._close_heartbeat()
+            try:
+                service = await self.start_lockdown_service(self.HEARTBEAT_SERVICE_NAME)
+            except (PyMobileDevice3Exception, OSError) as e:
+                self.logger.debug("no heartbeat with %s: %r", self.identifier, e)
+                return
+            self._heartbeat_service = service
+            self._heartbeat = asyncio.create_task(self._answer_heartbeat(service))
+
+    async def _close_heartbeat(self) -> None:
+        """Stop answering the heartbeat, if it is, and close its connection."""
+        heartbeat, service = self._heartbeat, self._heartbeat_service
+        self._heartbeat = self._heartbeat_service = None
+        try:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                await asyncio.wait({heartbeat})
+        finally:
+            if service is not None:
+                # The device never completes the TLS shutdown of this connection; don't wait for it.
+                await service.close(timeout=0)
+
+    async def _answer_heartbeat(self, service: ServiceConnection) -> None:
+        """Reply ``Polo`` to every ``Marco`` the device sends, until cancelled or the connection is lost."""
+        try:
+            while True:
+                self.logger.debug(await service.recv_plist())
+                await service.send_plist({"Command": "Polo"})
+        except (PyMobileDevice3Exception, OSError, asyncio.IncompleteReadError) as e:
+            # The services running through this client are about to go with it; say why.
+            self.logger.warning("lost the heartbeat with %s, the device will drop its services: %r", self.identifier, e)
 
     async def create_service_connection(
         self, port: int, ssl_context: Optional[SSLContext] = None, strip_ssl: bool = False
