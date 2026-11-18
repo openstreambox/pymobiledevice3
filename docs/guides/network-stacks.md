@@ -34,7 +34,10 @@ flowchart LR
 ## Wi-Fi lockdown (mobdev2)
 
 The same lockdown protocol, carried over the LAN to port 62078 (`--mobdev2` /
-`get_mobdev2_lockdowns`). Devices are discovered over bonjour.
+`get_mobdev2_lockdowns`). Devices are discovered over bonjour, or addressed directly with
+`--mobdev2-host HOSTNAME` when the address is already known. From Python, `create_using_mobdev2`
+does both: `async with await create_using_mobdev2("192.168.0.2") as lockdown:` (omit the hostname to
+take the first paired device found over bonjour).
 
 ```mermaid
 flowchart LR
@@ -48,6 +51,8 @@ flowchart LR
   `com.apple.mobile.heartbeat` (iOS and tvOS 27.2 do so within seconds, for most services). The network
   lockdown client answers it in the background from the moment it is created until it is closed,
   so keep it open for as long as its services are in use.
+- **USB only:** `pcap` is not available here. `com.apple.pcapd` is the one service lockdownd only
+  starts for a USB host.
 
 ## Kernel tunnel (`start-tunnel` / `tunneld`)
 
