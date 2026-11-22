@@ -140,6 +140,60 @@ def test_crash_parse_lists_the_threads_of_the_processes_asked_for(
     assert "Process: food (pid 77, 1 threads)" in out
 
 
+_STACKSHOT = _HEADER % "288" + json.dumps({
+    "product": "iPhone19,4",
+    "build": "iPhone OS 27.2.1 (24B91034)",
+    "reason": "stackshot via sysdiagnose",
+    "binaryImages": [["11111111-2222-3333-4444-555555555555", 0x104000000, "P"]],
+    "processByPid": {
+        "0": {
+            "procname": "kernel_task",
+            "threadById": {"1": {"name": "idle #0", "state": ["TH_RUN", "TH_IDLE"]}},
+        },
+        "77": {
+            "procname": "food",
+            "waitInfo": ["thread 500: pthread condvar 0x1"],
+            "threadById": {"500": {"state": ["TH_WAIT"], "userFrames": [[0, 0x40]]}},
+        },
+    },
+})
+
+
+def test_crash_parse_lists_the_threads_of_a_stackshot(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stackshot = get_crash_report_from_buf(_STACKSHOT, filename="/stacks.ips")
+    monkeypatch.setattr(crash_module, "CrashReportsManager", _fake_manager([stackshot]))
+
+    crash_module.crash_parse(_FAKE_SERVICE_PROVIDER, "/stacks.ips")
+    out = capsys.readouterr().out
+    assert "Reason: stackshot via sysdiagnose" in out
+    assert "Process:" not in out
+
+    crash_module.crash_parse(_FAKE_SERVICE_PROVIDER, "/stacks.ips", process=["food"])
+    out = capsys.readouterr().out
+    assert "Process: food (pid 77, 1 threads)" in out
+    assert "Thread: tid 500 [TH_WAIT]" in out
+    assert "Waiting: pthread condvar 0x1" in out
+    assert "Process: kernel_task" not in out
+
+    # only the threads which were on a CPU
+    crash_module.crash_parse_latest(_FAKE_SERVICE_PROVIDER, running=True)
+    out = capsys.readouterr().out
+    assert "Thread: tid 1 idle #0 [TH_RUN, TH_IDLE]" in out
+    assert "Process: food" not in out
+
+
+@pytest.mark.asyncio
+async def test_crash_shell_parse_lists_the_threads_of_a_stackshot(capsys: pytest.CaptureFixture[str]) -> None:
+    shell = CrashReportsShell(cast(CrashReportsManager, _ShellManager({"stacks.ips": _STACKSHOT})))
+
+    assert await shell.run_line("parse stacks.ips -r -p food") == 0
+    out = capsys.readouterr().out
+    assert "Process: kernel_task (pid 0, 1 threads)" in out
+    assert "Process: food (pid 77, 1 threads)" in out
+
+
 def test_crash_parse_rejects_processes_a_report_does_not_hold(monkeypatch: pytest.MonkeyPatch) -> None:
     panic = get_crash_report_from_buf(_PANIC_WITH_PROCESSES, filename="/panic-full.ips")
     crash = get_crash_report_from_buf(_CRASH, filename="/other.ips")
@@ -149,7 +203,7 @@ def test_crash_parse_rejects_processes_a_report_does_not_hold(monkeypatch: pytes
         crash_module.crash_parse(_FAKE_SERVICE_PROVIDER, "/panic-full.ips", process=["nosuchd"])
 
     monkeypatch.setattr(crash_module, "CrashReportsManager", _fake_manager([crash]))
-    with pytest.raises(typer.BadParameter, match="apply to panic reports only"):
+    with pytest.raises(typer.BadParameter, match="apply to panic and stackshot reports only"):
         crash_module.crash_parse(_FAKE_SERVICE_PROVIDER, "/other.ips", all_processes=True)
 
 
