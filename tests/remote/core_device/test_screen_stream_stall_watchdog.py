@@ -58,6 +58,8 @@ def test_a_silent_device_is_restarted_up_to_the_limit():
     assert all(b - a >= screen_stream._STALL_RESTART_COOLDOWN_SECS for a, b in zip(restarts, restarts[1:]))
     # Told once: the grace period of each fresh session is not the device coming back.
     assert _online_states(queue) == [False]
+    # Unanswered throughout: the device is gone, which ends serve().
+    assert server._device_disconnected.is_set()
 
 
 def test_a_device_that_answers_the_restart_is_forgiven():
@@ -69,6 +71,7 @@ def test_a_device_that_answers_the_restart_is_forgiven():
     _run(server, 112.0, 30.0, sender_reports=True)
 
     assert server._consecutive_restarts == 0
+    assert not server._device_disconnected.is_set()
     assert _online_states(queue) == [False, True]
 
 
@@ -77,3 +80,14 @@ def test_the_online_message_carries_the_current_state():
     server._device_silent = True
 
     assert json.loads(server._device_online_message()[5:]) == {"online": False}
+
+
+def test_a_closed_userspace_tunnel_reads_as_a_dead_tunnel():
+    try:
+        try:
+            raise ConnectionError("userspace dial plane is closed")
+        except ConnectionError as e:
+            raise RuntimeError("start_video_stream failed") from e
+    except RuntimeError as wrapped:
+        assert screen_stream._is_tunnel_dead_error(wrapped)
+    assert not screen_stream._is_tunnel_dead_error(ValueError("unrelated"))

@@ -1354,10 +1354,10 @@ async function run() {
     try {
         support = await VideoDecoder.isConfigSupported({ codec, description });
     } catch (e) {
-        log('isConfigSupported threw: ' + e.message); return;
+        log('isConfigSupported threw: ' + e.message); return 'unsupported';
     }
     log('isConfigSupported: ' + JSON.stringify(support));
-    if (!support.supported) { log('FAIL: codec not supported'); return; }
+    if (!support.supported) { log('FAIL: codec not supported'); return 'unsupported'; }
 
     let decodeErrCount = 0;
     let needsResync = false;     // skip deltas until we see the next key after an error
@@ -1564,4 +1564,18 @@ async function run() {
         }
     }
 }
-run().catch(e => log('fatal: ' + e.message));
+// The stream is over: the device disconnected and the server stopped (or was
+// stopped). Run with --reconnect it comes back once the device does, on the
+// same address, so wait for it to have a stream again and start over. (Not when
+// this browser cannot decode the stream: starting over would change nothing.)
+async function waitForServerAndReload() {
+    offlineOverlay.classList.remove('hidden');
+    for (;;) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+            if ((await fetch('/codec', {cache: 'no-store'})).ok) break;
+        } catch (e) {}
+    }
+    location.reload();
+}
+run().catch(e => log('fatal: ' + e.message)).then(r => { if (r !== 'unsupported') waitForServerAndReload(); });

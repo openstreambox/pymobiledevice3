@@ -48,6 +48,16 @@ Open <http://127.0.0.1:8080/>. The device appears inside a phone frame, live:
 Video is decoded in the browser itself (WebCodecs), which is why nothing needs to be installed on
 the viewing machine.
 
+### When the device disconnects
+
+If the device is unplugged or restarts, the viewer shows *Device not responding* and the command
+stops with `The device disconnected.` Add `--reconnect` to have it wait for the device and start
+again by itself; a viewer left open picks the screen back up, with no reload:
+
+```shell
+pymobiledevice3 --reconnect developer core-device display serve-web
+```
+
 ### Sharing with other machines
 
 By default the viewer only listens on this computer. To reach it from the rest of the network, bind
